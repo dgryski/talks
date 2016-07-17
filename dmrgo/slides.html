@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>dmrgo</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <script src="remark-0.6.5.min.js" type="text/javascript">
+    </script>
+    <link rel="stylesheet" href="slides.css" type="text/css" media="screen">
+  </head>
+  <body>
+    <textarea id="source"></textarea>
+    <script type="text/javascript">
+          xmlhttp=new XMLHttpRequest();
+          xmlhttp.open('GET', 'slides.md', false);
+          xmlhttp.send();
+          src = document.getElementById("source")
+          src.innerHTML = xmlhttp.responseText
+          var slideshow = remark.create();
+    </script>
+  </body>
+</html>
