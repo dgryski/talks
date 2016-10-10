@@ -1,0 +1,274 @@
+Slices
+Performance through cache friendliness
+
+dotGo
+10 Oct 2016
+
+Damian Gryski
+@dgryski
+https://github.com/dgryski
+
+
+
+* Slices
+
+reflect/value.go
+
+    type SliceHeader struct {
+            Data uintptr
+            Len  int
+            Cap  int
+     }
+
+: Today I'm going to talk about how slices work with CPU caches and how to take advantage of this when writing performant code.
+
+: This is a slice. A pointer to a block of memory, a length field, and a total capacity.
+
+: The length field tells us how many entries are valid.  The capacity is how much has been allocated.  Both these numbers are counts and relative need to be scaled by the size of each slice element to be turned into bytes.
+
+* Sizeof
+
+.play sizeof/main.go /START OMIT/,/END OMIT/
+
+: We can get this with unsafe.Sizeof().  Then we can calculate exactly where each element is in memory:
+
+: This is what the compiler does every time you access an element. These are bounds checked to make sure we don't access invalid memory.  The SSA backend works to remove these checks where possible, and the branch predictor in your processor will quickly learn they all pass. So in the end they have very little cost.
+
+* Append
+
+runtime/slice.go
+.code append/main.go /START OMIT/,/END OMIT/
+
+: You can also append to a slice.  If there's space left, that is the new length is less than the capacity, it'll get slotted in.  Otherwise a new chunk of memory is allocated with a larger capacity, the old slice is copied over, and the new element is added.
+
+: The new capacity is twice the old capacity, or 1.25 the old capacity if the slice is bigger than 1024 elements.  This gives amortized O(1) append.  It's pretty cool, actually.  The theory and practice match up.  You can benchmark this.  It works.
+
+: If you know how big your slice needs to be, preallocate it and save yourself the copying and the extra gc pressure.
+
+: Append is getting faster in 1.8 too.  There was a small patch to `runtime.growslice`, the method that actually handles append under the hood to not clear the bytes that will be overwritten with the old data.  The benchmarks show this as ~10-15% faster.
+
+* Homework
+
+.link https://blog.golang.org/go-slices-usage-and-internals
+.link https://blog.golang.org/slices
+
+.link https://github.com/golang/go/blob/master/src/runtime/slice.go runtime/slice.go
+
+: So, slices are very convenient.  Dynamically sized arrays.  Amortized O(1) append().  Bounds checked on access.  Length and capacity are part of the slice so they never get out of sync.
+
+: All the basics are covered in these two blog posts
+
+: But for today's talk I only really care about the data field.  The large chunk of contiguous bytes in memory.
+
+* Moore's Law
+
+.image images/Part6-CPU-and-RAM-speeds-563x300.jpg 500 _
+
+: First, a brief digression on computer hardware.
+
+: Moore's Law says that the number of transistors on a processor doubles every 18 months.  You can see on this graph where the single core performance plateaued.  We're now scaling things by adding more cores.  Which of course is why languages like Go are interesting.
+
+: The bottom line on the graph is rate at which RAM speed is increasing.  Much much slower.
+
+: So instead processors add levels of caches to try to hide this massive speed difference.
+
+* Numbers Every Programmer Should Know
+
+.code images/latency.txt
+
+3GHz * 4 instructions per cycle  = 12 instructions per nanosecond
+
+: We've all seen this slide in various forms.  The original numbers were from 2003, but there have been a few updates since then.
+
+: We see the timings for the different layers of CPU caches.  Order of magnitude bigger, but order of magnitude slower.
+
+: My laptop has 2 x 32kB L1 cache; 2 x 256kB L2 cache, 3MB L3 cache.  And 16GB of main memory.
+
+: Some quick calculations. Let's say you have a 3GHz processor.  That's three cycles every nanosecond.  If your processor can do 4 instructions per cycle, then in 100ns it takes to fetch a cacheline from main memory you've just stalled for 1200 instructions.  You can do a lot of work in 1200 instructions.
+
+: So, while we can process data faster than ever before, the bottleneck is now getting the data to the processor.
+
+: Which means a program that plays nicely with the different layers of caching is going to be faster that one that can't.  And as the latency numbers tell us, orders of magnitude faster.
+
+* Cache Lines
+
+.code cacheline/cache.go /START OMIT/,/END OMIT/
+
+: Here's some code.  It allocates 128M of int32s, do some math with every element, then returns.
+
+: Then I do the same thing but for only every second element.  I'm doing half the work, it should be twice as fast.
+
+: But it's not.
+
+* Cache Lines
+
+.image cacheline/cache.png 600 _
+
+: In order to access a single element, we've had to pull in an entire cacheline.  In this case, 64-bytes, or 16 4-byte integers.  Accessing the other elements in the same cache line is basically free.
+
+: The expensive thing is accessing a new cacheline.  It's only once we're accessing fewer cache lines, that our program starts speeding up.
+
+: This graph looks roughly the same for ints16s and int64s.  Different numbers of elements, but still 64-bytes.
+
+: Accessing elements on the same cacheline is free.  Let's see how to use this.
+
+: But first, some theory.
+
+* Big-O Notation
+
+.image images/BigO.png 500 _
+
+: Back to school. Algorithms. Complexity analysis. We've all had these facts pounded into our brains.
+
+: accessing a map element is O(1); binary search is O(log n); iterating over a list is O(n); sorting is O(n log n)
+
+: Two things that people forget when discussion big-O notation
+
+: One: there's a constant factor involved.  Two algorithms which have the same algorithmic complexity can have different constant factors. Imagine running a looping over a list 100 times vs just looping over it once Even though both are O(n), one has a constant factor that's 100 times higher.
+
+: These constant factors are why even though merge sort, quicksort, and heapsort all O(n log n), everybody uses quicksort because it's the fastest.  It has the smallest constant factor.
+
+: The second thing that people forget is that big-O only says "as n grows to infinity".  It says nothing about small n.  "As the numbers get big, this is the growth factor that will dominate the run time." 
+
+: There's frequently a cut-off point below which a dumber algorithm is faster.  An nice example from the Go standard library's `sort` package.  Most of the time it's using quicksort,  but it has a shell-sort pass then insertion sort when the partition size drops below 12 elements.
+
+* Map vs Linear Search
+
+.image map/list-vs-map1.png 600 _
+
+: Enough theory. Back to some code.
+
+: Let's talk about storing a set of ints.
+
+: If I just had to remember a single integer, I'd use a variable.  A map is overkill.  What if I had two integers?  10 integers?  Where's the cut-off where a map becomes faster than searching through an array of integers.
+
+: I've benchmarked this and here's the graph. From a performance perspective, until you have about 30 elements, a slice is faster.
+
+: This obviously comes with a lot of caveats.  An interesting one is that this only works with integers.  Strings require not only an additional pointer dereference (meaning the body of the string needs to be fetched into the cache), but a comparing two strings takes longer than comparing two integers.  You have to iterate over all the bytes.
+
+: Here the constant factor shifts.  For strings, a map is *always* faster.
+
+: Next, what about if it's sorted?
+
+: Using sort.Search() is expensive because of the function call overhead -- you can't really get beyond 10-20 elements before the map is faster.  However, you can inline the binary search code.  Always dangerous.  It's notoriously tricky to get right.  That's why there's one in the standard library called sort.Search().
+
+* Map vs Binary Search
+
+.image map/list-vs-map2.png 600 _
+
+: However, when performance is important, you do dangerous things.  With a custom binary search, on my laptop, I got up to about 1500 integers before a map is consistently faster.  And in fact a binary search in a regular sorted array isn't that cache friendly.  There are other layouts that can make it even faster.
+
+* Slice vs Linked-List
+
+5, 1, 4, 2
+
+    5
+    1 5
+    1 4 5
+    1 2 4 5
+
+1, 2, 0, 0
+
+    1 2 4 5
+    1 4 5
+    1 4
+    4
+
+
+: A slightly more complicated example here.  This is from a great article by Bjarne Stroustroup called "Software for Infrastructure".
+
+: The problem statement:
+
+: First: generate N random integers and insert them in sorted order into a sequence
+
+: Then: remove them one at a time by selecting a random position from the sequence
+
+: Lets consider two standard implementations here: a slice and a linked-list.
+
+: For a slice, we have to find the right position, which we can do with a binary search which is easy enough.  Inserting the element though requires shifting every element over one spot.  Same thing for removal.  Easy enough to find the spot, but then expensive to remove.
+
+: For a linked-list we have find the spot (linear time), though, we can do the insert and deletion piece is only O(1).  That's much faster.
+
+: So what does it look like when we run it?
+
+* Slice vs Linked-List
+
+.image insert/insert-log.png 600 _
+
+: Well, not so good for linked-lists.  I ran this up to 500k elements.  The linked-list never caught up, and in fact just kept getting worse.  
+
+: All those O(n) list traversals were chasing pointers.  Which end up being cache misses.  The constant factor on that is pretty high.
+
+: In the slice version, the CPU is *very* good at copying memory around.  The constant factor for that about as low as it can get.
+
+: And even if we don't use a binary search, just a regular linear scan through the array, the CPU will prefetch all that memory with no stalls.  It's still faster.
+
+: This graph is a little misleading because it's log-scale on both axis.  Here's what happens if I make the Y axis linear.
+
+* Slice vs Linked-List
+
+.image insert/insert.png 600 _
+
+: At 200k elements, the slice version took 12s and the linked list version took 4m8s.
+: At 500k elements, the slice version took 1m22s and I killed the linked list version because I was tired of waiting.
+
+: Now, obviously this is an artificial example.  But this does happen in practice.  Algorithms with faster theoretical numbers which are drowned out by the constant factors due to pointer chasing and poor use of cache.
+
+* Conclusions
+
+* Optimizing for Cache Usage
+
+- Use kcachegrind and perf to count cache misses
+
+- Store less
+
+- Access memory in a predictable manner
+
+: So, what can we learn from this.  Is the conclusion "always use a slice"?  Kind of.
+
+: Like all benchmarks, these ones have flaws. The real issue here is that in all these cases we're not doing any *work*.  Our benchmarks are entirely dominated by data access time.
+
+: If we did some computation at each step, even something as dumb as calling a very fast random number generator, we can very easily shift our program from being bound by the data access to be bound by computation.
+
+: We know how to optimize CPU bound programs.  Profile. Choose a more efficient algorithm.  Do less work.  
+
+: How do you optimize programs bound by data access?
+
+: First, you have to recognize this is happening.   Pprof will tell you which routines are taking up the most time.  But it's hard to know if that time is wasted because of cache misses.  kcachegrind will do this for you.  Perf will do this for you.  Once you have some rough numbers, then you can begin.
+
+: Store the minimum amount of data you need.  You can fit more more smaller things into the cache.  I had one program I sped up 15% with a single change  of a slice from int64s to int32s.  With a smaller ID, I could fit more into my processor cache which made searching through them faster.
+
+: While I've been talking mostly about slices, this applies to structs too.  Remove extra fields you don't need.  Re-order fields to eliminate struct padding.  There are tools to help you with this.
+
+: Next, access memory in a predictable manner.
+
+: Searching through the array linearly is predictable access.  Shifting the elements over one is predictable.  Traversing the linked-list is not.
+
+: Modern processors have a prefetcher that look for patterns in memory and fill the cache with data so you don't have to wait as long.  But it can't predict pointer traversals.
+
+: So, now you know how to optimize for cache usage.
+
+: But should you actually do this?
+
+* (Real) Conclusion
+
+"Notes in C Programming" (Rob Pike, 1989)
+
+    Rule 3. Fancy algorithms are slow when n is small, and n is usually small.
+    Fancy algorithms have big constants. Until you know that n is frequently going
+    to be big, don't get fancy.
+
+    Rule 4. Fancy algorithms are buggier than simple ones, and they're much
+    harder to implement. Use simple algorithms as well as simple data structures.
+
+: The point I really want to leave you with is this: modern computers and compilers have gotten very good at executing simple, dumb algorithms quickly.  So that's where you should start.  These benchmarks, as artificial as they were, are indications of why.  Simple algorithms tend not to have too much baggage.  A list of things, maybe a counter or two.  Simple algorithms tend to have predictable access patterns.  Scanning through arrays.  Copying values around.
+
+: Here are rules from Rob Pike's "Notes in C Programming".
+
+: What `n` needs to be in order to be considered "small" is getting bigger all the time.
+
+: Use simple algorithms and simple data structures.
+
+: And it might still be fast.
+
+: Thanks.
