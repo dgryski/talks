@@ -252,7 +252,7 @@ runtime/slice.go
 
 * (Real) Conclusion
 
-"Notes in C Programming" (Rob Pike, 1989)
+"Notes on C Programming" (Rob Pike, 1989)
 
     Rule 3. Fancy algorithms are slow when n is small, and n is usually small.
     Fancy algorithms have big constants. Until you know that n is frequently going
@@ -263,7 +263,7 @@ runtime/slice.go
 
 : The point I really want to leave you with is this: modern computers and compilers have gotten very good at executing simple, dumb algorithms quickly.  So that's where you should start.  These benchmarks, as artificial as they were, are indications of why.  Simple algorithms tend not to have too much baggage.  A list of things, maybe a counter or two.  Simple algorithms tend to have predictable access patterns.  Scanning through arrays.  Copying values around.
 
-: Here are rules from Rob Pike's "Notes in C Programming".
+: Here are rules from Rob Pike's "Notes on C Programming".
 
 : What `n` needs to be in order to be considered "small" is getting bigger all the time.
 
