@@ -8,13 +8,9 @@ class: center, middle, inverse
 
 - `testing/quick`
 
-- `github.com/google/gofuzz`
-
-- `github.com/zimmski/tavor`
-
 - `github.com/dvyukov/go-fuzz`
 
-- things I would like
+- plus some others
 
 ---
 
@@ -33,6 +29,8 @@ class: center, middle, inverse
 # why we care
 
 - writing tests is boring
+
+- humans write biased tests
 
 - have the computer write them for you
 
@@ -56,7 +54,7 @@ class: center, middle, inverse
 func TestQuick(t *testing.T) {
     q := func(i, j int) bool {
         quo, rem := Div(i, j)
-        return i == quo*j+rem 
+        return i == quo*j+rem
     }
 
     if err := quick.Check(q, nil); err != nil {
@@ -73,7 +71,7 @@ func TestQuick(t *testing.T) {
 func TestQuick(t *testing.T) {
     q := func(i, j int) bool {
         quo, rem := Div(i, j)
-        return i == quo*j+rem 
+        return i == quo*j+rem
     }
 
     if err := quick.Check(q, nil); err != nil {
@@ -116,7 +114,7 @@ func TestQuick(t *testing.T) {
 	f := func(si, sj small) bool {
                 i, j := int(si), int(sj)
                 quo, rem := Div(i, j+1)
-                return i == quo*j+rem 
+                return i == quo*j+rem
 	}
 
 	if err := quick.Check(f, nil); err != nil {
@@ -140,6 +138,14 @@ func TestQuick(t *testing.T) {
 
 ---
 
+# generational fuzzing
+
+- lots of packages
+
+- might need to write your own if your language is "tricky"
+
+---
+
 # github.com/zimmski/tavor
 
 - framework with lots of features
@@ -153,10 +159,10 @@ func TestQuick(t *testing.T) {
 ```
 START = target
 target = metric | function
-function = name "(" arguments ")" 
+function = name "(" arguments ")"
 name = ([A-Za-z]) *([\w])
 arguments = argument *( "," argument )
-argument = metric | function | qstring | number 
+argument = metric | function | qstring | number
 qstring = "\"" +([\w]) "\""
 number = +([0-9]) | +([0-9]) "." +([0-9])
 metric = name *( "." +([\w]) )
@@ -193,6 +199,12 @@ metric :=
 
 ---
 
+# sequitur
+
+- dgryski/go-sequitur
+
+---
+
 # github.com/dvyukov/go-fuzz
 
 - dvyukov
@@ -207,15 +219,15 @@ metric :=
 
 - understands simple text protocols
 
-- network mode
+- clustering mode
 
 ---
 
 # github.com/dvyukov/go-fuzz
 
-- go-fuzz-build github.com/user/package
-- mkdir -p workdir/corpus && cp inputs* workdir/corpus
-- go-fuzz -bin=package-fuzz.zip -workdir=workdir
+- cd github.com/user/package
+- mkdir corpus && cp inputs* corpus
+- go-fuzz-build && go-fuzz
 
 ---
 
@@ -293,6 +305,23 @@ func Fuzz(data []byte) int {
 
 ---
 
+# github.com/dvyukov/go-fuzz
+
+```go
+func Fuzz(data []byte) int {
+    purego := hashGo(data);
+    asm, cgo := C.Hash(data), hashAsm(data)
+
+    if !bytes.Equal(purego, asm) || !bytes.Equal(purego, cgo) {
+        panic("behaviour mismatch")
+    }
+
+    return 1
+}
+```
+
+---
+
 # stateful fuzzing
 
 - ideas from functional programming
@@ -360,12 +389,11 @@ put(1, 12); getmin(); put(4, 31);
 
 ---
 
-# other libraries
+# stateful fuzzing
 
-- QuickCheck (Haskell)
-- Quviq QuickCheck (Erlang)
-- SmartCheck (Clojure)
-- Hypothesis (Python)
+- dgryski/go-tinymap: real-world custom example
+
+- mschoch/smat: sadly abandoned repo
 
 ---
 
@@ -374,6 +402,8 @@ put(1, 12); getmin(); put(4, 31);
 - randomized test case generation
 
 - test case minimization
+
+- https://www.fuzzingbook.org/
 
 ---
 class: center, middle, inverse
